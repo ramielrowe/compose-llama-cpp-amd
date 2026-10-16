@@ -1,0 +1,97 @@
+# Qwen3.8-27B on llama.cpp (HIP, built from source) — RX 7900 XTX
+#
+#   scripts/build.sh                                  # build image for LLAMA_REF
+#                                                     # (`compose build` needs docker-buildx;
+#                                                     #  build.sh works with the legacy builder)
+#   docker compose up -d                              # serve
+#   docker compose run --rm bench llama-bench ...     # one-shot tools (bench/perplexity)
+#
+# All tunables live in .env (copy from .env.example).
+
+x-gpu: &gpu
+  devices:
+    # renderD128 IS the 7900 XTX on this box (renderD128 -> 0000:03:00.0).
+    # The iGPU is renderD129 and is deliberately not passed through.
+    - /dev/kfd
+    - /dev/dri/renderD128
+  group_add:
+    - video
+    - render
+  ipc: host
+  security_opt:
+    - seccomp:unconfined
+  environment:
+    # gfx1100 is a supported ROCm target: no HSA_OVERRIDE_GFX_VERSION.
+    HIP_VISIBLE_DEVICES: "0"
+    # Avoids ROCm's idle 100%-busy spin on the GPU between requests.
+    GPU_MAX_HW_QUEUES: "1"
+    # Passed as env, not argv, so the key isn't visible in `ps` on the host.
+    LLAMA_API_KEY: ${API_KEY:?set API_KEY in .env}
+
+x-hip-image: &hip-image
+  image: local/llama-hip:${LLAMA_REF}
+  build:
+    context: .
+    dockerfile: docker/rocm.Dockerfile
+    args:
+      ROCM_IMAGE: ${ROCM_IMAGE}
+      LLAMA_REF: ${LLAMA_REF}
+
+services:
+  llama:
+    <<: [*gpu, *hip-image]
+    container_name: qwen38-hip
+    restart: unless-stopped
+    stop_grace_period: 30s
+    volumes:
+      - ./models:/models:ro
+    ports:
+      - "${BIND_ADDR:-127.0.0.1}:${PORT:-8080}:8080"
+    # --fit off: fail loudly instead of silently offloading layers to CPU.
+    command: >-
+      -m /models/${MODEL_FILE}
+      -a ${MODEL_ALIAS}
+      -ngl 999 --fit off
+      -c ${CTX} -np 1
+      -fa on -ctk ${CTK} -ctv ${CTV}
+      -b ${BATCH} -ub ${UBATCH}
+      -cram ${CACHE_RAM_MIB}
+      --jinja
+      --temp ${TEMP} --top-p ${TOP_P} --top-k ${TOP_K} --min-p ${MIN_P}
+      --host 0.0.0.0 --port 8080
+      ${SPEC_ARGS:-}
+
+  # One-shot tools against the same image/devices:
+  #   docker compose run --rm bench llama-bench -m /models/... -fa 1 ...
+  bench:
+    <<: [*gpu, *hip-image]
+    profiles: ["bench"]
+    entrypoint: []
+    working_dir: /work
+    volumes:
+      - ./models:/models:ro
+      - ./data:/data
+      - ./results:/work/results
+
+  # Same commit, Vulkan backend — A/B benchmarking only.
+  vulkan-bench:
+    profiles: ["vulkan"]
+    image: local/llama-vulkan:${LLAMA_REF}
+    build:
+      context: .
+      dockerfile: docker/vulkan.Dockerfile
+      args:
+        LLAMA_REF: ${LLAMA_REF}
+    devices:
+      - /dev/dri/renderD128
+    group_add:
+      - video
+      - render
+    environment:
+      LLAMA_API_KEY: ${API_KEY:?set API_KEY in .env}
+    entrypoint: []
+    working_dir: /work
+    volumes:
+      - ./models:/models:ro
+      - ./data:/data
+      - ./results:/work/results
