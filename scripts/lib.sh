@@ -3,7 +3,10 @@
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
+# A BACKEND set by the caller wins over the one in .env.
+_backend="${BACKEND:-}"
 [[ -f .env ]] && set -a && . ./.env && set +a
+export BACKEND="${_backend:-${BACKEND:-vulkan}}"
 
 TEST_PORT="${TEST_PORT:-18080}"
 TEST_NAME="${TEST_NAME:-qwen38-test}"
@@ -11,12 +14,13 @@ BASE_URL="http://127.0.0.1:${TEST_PORT}"
 
 # start_server <extra llama-server args...>
 # Starts a throwaway server from the compose `llama` service definition
-# (same image/devices/env), but with the given args instead of .env's.
+# (same image/devices/env, BACKEND picks the image), with the given args
+# instead of .env's.
 start_server() {
     stop_server
     docker compose run -d --name "$TEST_NAME" --no-deps \
         -p "127.0.0.1:${TEST_PORT}:8080" llama \
-        --host 0.0.0.0 --port 8080 -ngl 999 --fit off -np 1 --jinja "$@" >/dev/null
+        --host 0.0.0.0 --port 8080 -ngl 999 --fit off -np 1 --jinja -lv 4 "$@" >/dev/null
 }
 
 stop_server() {
@@ -53,4 +57,11 @@ ensure_wikitext() {
     curl -fsSL -o "$tmp/w.zip" https://huggingface.co/datasets/ggml-org/ci/resolve/main/wikitext-2-raw-v1.zip
     python3 -I -c 'import sys,zipfile; z=zipfile.ZipFile(sys.argv[1]); open(sys.argv[2],"wb").write(z.read("wikitext-2-raw/wiki.test.raw"))' "$tmp/w.zip" data/wiki.test.raw
     rm -rf "$tmp"
+}
+
+# GTT (system RAM mapped for the GPU) in use, MiB. RADV silently spills
+# allocations here when VRAM is full instead of failing; HIP fails instead.
+gtt_used_mib() {
+    rocm-smi -d 0 --showmeminfo gtt --json 2>/dev/null | grep "^{" |
+        python3 -c 'import json,sys; d=json.load(sys.stdin); c=next(iter(d.values())); print(int(c["GTT Total Used Memory (B)"])//2**20)'
 }

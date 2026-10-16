@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Build the HIP image (and optionally the Vulkan one) for LLAMA_REF.
+# Build the HIP and/or Vulkan images for LLAMA_REF.
 #
-#   scripts/build.sh                 # LLAMA_REF from .env
+#   scripts/build.sh                 # LLAMA_REF from .env, both backends
 #   scripts/build.sh master          # bleeding edge
-#   scripts/build.sh b11679 vulkan   # also build the Vulkan A/B image
+#   scripts/build.sh b11679 vulkan   # one backend only (hip|vulkan|all)
 #
 # The ref is resolved to a commit SHA first, so a moving ref (master) always
 # rebuilds instead of reusing a cached clone layer. The image is tagged with
@@ -23,16 +23,21 @@ else
 fi
 echo "llama.cpp $REF -> $SHA"
 
-docker build -f docker/rocm.Dockerfile \
-    --build-arg ROCM_IMAGE="${ROCM_IMAGE:-docker.io/rocm/dev-ubuntu-26.04:10.1.0-full}" \
-    --build-arg LLAMA_REF="$SHA" \
-    -t "local/llama-hip:$REF" -t "local/llama-hip:${SHA:0:12}" .
+WHICH="${2:-all}"
 
-if [[ "${2:-}" == vulkan ]]; then
+if [[ $WHICH == all || $WHICH == hip ]]; then
+    docker build -f docker/rocm.Dockerfile \
+        --build-arg ROCM_IMAGE="${ROCM_IMAGE:-docker.io/rocm/dev-ubuntu-26.04:10.1.0-full}" \
+        --build-arg LLAMA_REF="$SHA" \
+        -t "local/llama-hip:$REF" -t "local/llama-hip:${SHA:0:12}" .
+    docker run --rm --entrypoint cat "local/llama-hip:$REF" /app/BUILD_INFO
+fi
+
+if [[ $WHICH == all || $WHICH == vulkan ]]; then
     docker build -f docker/vulkan.Dockerfile \
         --build-arg LLAMA_REF="$SHA" \
         -t "local/llama-vulkan:$REF" -t "local/llama-vulkan:${SHA:0:12}" .
+    docker run --rm --entrypoint cat "local/llama-vulkan:$REF" /app/BUILD_INFO
 fi
 
-docker run --rm --entrypoint cat "local/llama-hip:$REF" /app/BUILD_INFO
 [[ "$REF" == "${LLAMA_REF:-}" ]] || echo "note: set LLAMA_REF=$REF in .env to serve this build"

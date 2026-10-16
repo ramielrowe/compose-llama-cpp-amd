@@ -4,12 +4,13 @@
   fill   <n_tokens>          prefill n tokens of corpus text, report timings
   niah   <n_tokens> [k]      k-needle retrieval in an n-token haystack
   leak                       temp-0 determinism across a reused slot (#29092)
-  spec   [n_predict]         decode timings + draft acceptance on fixed prompts
+  spec   [n_predict] [depths]  decode t/s + draft acceptance, short prompts + summaries at depths
 
 Env: BASE_URL (default http://127.0.0.1:18080), API_KEY, CORPUS (default data/wiki.test.raw).
 Every subcommand prints one JSON line on stdout.
 """
 
+import hashlib
 import json
 import os
 import random
@@ -148,31 +149,36 @@ SPEC_PROMPTS = {
     "code": "Write a complete Python implementation of a thread-safe LRU cache class with get, put, "
             "and delete methods, type hints, docstrings and a few unit tests.",
     "prose": "Write a 600-word short story about a lighthouse keeper who finds a message in a bottle.",
-    "summary": "Summarise the following text in about 300 words.\n\n",
+    "summary": "Summarise the following text in about 300 words.\n\n",  # + corpus excerpt
 }
 
 
-def cmd_spec(n_predict=512):
-    """Decode speed and draft acceptance on three fixed prompts (thinking off, temp 0)."""
+def cmd_spec(n_predict=512, depths="16000"):
+    """Decode speed, draft acceptance and a greedy-output fingerprint (thinking off,
+    temp 0): two short prompts (code, prose), plus a summary of a corpus excerpt
+    at each comma-separated depth in `depths` (tokens)."""
     n_predict = int(n_predict)
+    jobs = [("code", SPEC_PROMPTS["code"]), ("prose", SPEC_PROMPTS["prose"])]
+    for d in (int(x) for x in str(depths).split(",") if x):
+        jobs.append((f"summary_{d}", SPEC_PROMPTS["summary"] + detokenize(corpus_tokens(d))))
     res = {}
-    for name, p in SPEC_PROMPTS.items():
-        if name == "summary":
-            p += detokenize(corpus_tokens(16000))
+    for name, p in jobs:
         r = post("/v1/chat/completions", {
             "messages": [{"role": "user", "content": p}], "temperature": 0, "max_tokens": n_predict,
             "cache_prompt": False, "chat_template_kwargs": {"enable_thinking": False},
-            "timings_per_token": False,
         })
         t = r.get("timings", {})
         res[name] = {
             "decode_tps": round(t.get("predicted_per_second", 0), 2),
             "prefill_tps": round(t.get("prompt_per_second", 0), 1),
+            "prompt_n": t.get("prompt_n"),
             "n": t.get("predicted_n"),
             "draft_n": t.get("draft_n"),
             "draft_accepted": t.get("draft_n_accepted"),
+            # greedy output fingerprint: speculative decoding must not change it
+            "sha": hashlib.sha256((r["choices"][0]["message"]["content"] or "").encode()).hexdigest()[:12],
         }
-    res["mean_decode_tps"] = round(sum(v["decode_tps"] for v in res.values()) / 3, 2)
+    res["short_mean_decode_tps"] = round((res["code"]["decode_tps"] + res["prose"]["decode_tps"]) / 2, 2)
     print(json.dumps(res))
 
 

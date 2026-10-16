@@ -1,6 +1,6 @@
 #
-# Same llama.cpp commit as the HIP image, Vulkan (Mesa RADV) backend.
-# Benchmark-only A/B against HIP; the served stack is HIP.
+# llama.cpp built from source with the Vulkan (Mesa RADV) backend.
+# Same commit as the HIP image; select with BACKEND=vulkan in .env.
 
 ARG UBUNTU_IMAGE=docker.io/library/ubuntu:26.04
 
@@ -56,4 +56,7 @@ WORKDIR /app
 
 ENV LLAMA_ARG_HOST=0.0.0.0
 ENV LLAMA_ARG_PORT=8080
+HEALTHCHECK --interval=15s --timeout=5s --start-period=10m \
+    CMD curl -fs http://localhost:8080/health || exit 1
+
 ENTRYPOINT ["/app/llama-server"]

@@ -7,7 +7,7 @@
 # Checks (see scripts/llm_client.py):
 #   niah <n_tokens> [needles]   needle retrieval in an n-token haystack
 #   leak                        recurrent-state leak across a reused slot (#29092)
-#   spec [n_predict]            decode t/s + draft acceptance
+#   spec [n_predict] [depths]   decode t/s + draft acceptance (+ summaries at depths)
 #   fill <n_tokens>             long prefill
 #
 # Appends {"check", "args", "server", "result"} to results/raw/server-test.jsonl.
